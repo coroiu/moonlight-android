@@ -10,6 +10,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Needed to create the release and push its tag on the default branch.
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  # Never cancel a default-branch run: it publishes a release.
+  cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -19,6 +28,27 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          # Full history: the version code is the commit count, and the
+          # release step pushes a tag.
+          fetch-depth: 0
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          BASE=$(sed -n 's/^twilightBaseVersion=//p' gradle.properties | tr -d '[:space:]')
+          if [ -z "$BASE" ]; then
+            echo "::error::twilightBaseVersion is missing from gradle.properties"
+            exit 1
+          fi
+          # Commit count is monotonic on an append-only branch and is already
+          # far above the upstream versionCode of 57, so updates install cleanly.
+          CODE=$(git rev-list --count HEAD)
+          NAME="$BASE.$CODE"
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "tag=v$NAME" >> "$GITHUB_OUTPUT"
+          echo "Building $NAME (versionCode $CODE)"
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -57,7 +87,10 @@ jobs:
           TWILIGHT_KEYSTORE: ${{ steps.keystore.outputs.ready == 'true' && format('{0}/twilight.p12', runner.temp) || '' }}
           TWILIGHT_KEYSTORE_PASSWORD: ${{ secrets.TWILIGHT_KEYSTORE_PASSWORD }}
           TWILIGHT_KEY_ALIAS: twilight
-        run: ./gradlew --no-daemon assembleRelease
+        run: |
+          ./gradlew --no-daemon assembleRelease \
+            -PtwilightVersionName='${{ steps.version.outputs.name }}' \
+            -PtwilightVersionCode='${{ steps.version.outputs.code }}'
 
       - name: Remove keystore
         if: always()
@@ -66,7 +99,7 @@ jobs:
       - name: Summarise build
         run: |
           {
-            echo "### APKs"
+            echo "### ${{ steps.version.outputs.name }}"
             echo
             if [ "${{ steps.keystore.outputs.ready }}" = "true" ]; then
               echo "Signed with the persistent Twilight key - installs as an update over the previous build."
@@ -84,7 +117,35 @@ jobs:
       - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
-          name: twilight-release-${{ github.sha }}
+          name: twilight-release-${{ steps.version.outputs.name }}
           path: app/build/outputs/apk/**/release/*.apk
           if-no-files-found: error
           retention-days: 90
+
+      # Everything merged to the default branch becomes a release. Unsigned
+      # APKs are never published - they cannot be installed as an update.
+      - name: Publish release
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+          steps.keystore.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          NAME: ${{ steps.version.outputs.name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::notice::Release $TAG already exists - nothing to publish."
+            exit 0
+          fi
+          mapfile -t APKS < <(find app/build/outputs/apk -path '*/release/*.apk' | sort)
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "::error::No release APKs found to publish."
+            exit 1
+          fi
+          gh release create "$TAG" "${APKS[@]}" \
+            --title "$NAME" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
+          echo "::notice::Published $TAG with ${#APKS[@]} APKs."

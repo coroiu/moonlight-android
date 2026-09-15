@@ -5,6 +5,7 @@ apply plugin: 'com.android.application'
 // alongside upstream Artemis rather than colliding with it.
 def twilightAppName = project.findProperty('twilightAppName') ?: 'Twilight'
 def twilightRepo = project.findProperty('twilightRepo') ?: 'OWNER/REPO'
+def twilightBaseVersion = project.findProperty('twilightBaseVersion') ?: '20.2.6'
 
 // Builds the Obtainium "add app" link used by the in-app update entry.
 // Mirrors the encoding upstream uses: literal scheme, percent-encoded JSON.
@@ -55,8 +56,11 @@ android {
         minSdk 21
         targetSdk 34
 
-        versionName "20.2.6"
-        versionCode = 57
+        // CI overrides both on every merge to the default branch so each
+        // release installs as an update over the last one. Local builds fall
+        // back to the upstream numbers.
+        versionName project.findProperty('twilightVersionName') ?: twilightBaseVersion
+        versionCode = Integer.parseInt((project.findProperty('twilightVersionCode') ?: '57').toString())
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
