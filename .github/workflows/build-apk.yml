@@ -1,0 +1,109 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ '**' ]
+    paths-ignore:
+      - '**.md'
+      - 'fastlane/**'
+      - 'store-assets/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      # Optional. Set these repository secrets to get a signed release APK.
+      # See the note at the bottom of this file.
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # app/build.gradle pins ndkVersion, so install that exact revision
+      # rather than whatever the runner image happens to ship.
+      - name: Install pinned NDK
+        run: |
+          NDK_VERSION=$(grep -oP 'ndkVersion\s+"\K[^"]+' app/build.gradle)
+          echo "Installing NDK $NDK_VERSION"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
+
+      - name: Build debug and release APKs
+        run: ./gradlew --no-daemon assembleDebug assembleRelease
+
+      - name: Sign release APKs
+        if: env.KEYSTORE_B64 != ''
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          APKSIGNER=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
+          echo "Using $APKSIGNER"
+          find app/build/outputs/apk -name '*-release-unsigned.apk' -print0 |
+            while IFS= read -r -d '' apk; do
+              signed="${apk%-unsigned.apk}.apk"
+              "$APKSIGNER" sign \
+                --ks "$RUNNER_TEMP/release.jks" \
+                --ks-pass env:KEYSTORE_PASSWORD \
+                --ks-key-alias "$KEY_ALIAS" \
+                --key-pass env:KEY_PASSWORD \
+                --out "$signed" "$apk"
+              echo "Signed $signed"
+            done
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: List built APKs
+        run: find app/build/outputs/apk -name '*.apk' -printf '%p  (%s bytes)\n' | sort
+
+      - name: Upload debug APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-debug-${{ github.sha }}
+          path: app/build/outputs/apk/**/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APKs
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release-${{ github.sha }}
+          path: app/build/outputs/apk/**/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+# Signing the release build (optional)
+# -----------------------------------
+# Without secrets, the release APKs are uploaded unsigned and Android will
+# refuse to install them. The debug APKs are always signed with Gradle's
+# throwaway debug key and install as-is.
+#
+# To get a signed release APK, create a keystore once:
+#
+#   keytool -genkey -v -keystore release.jks -alias artemis \
+#           -keyalg RSA -keysize 4096 -validity 10000
+#
+# then add these repository secrets (Settings -> Secrets and variables -> Actions):
+#
+#   ANDROID_KEYSTORE_BASE64    base64 -w0 release.jks
+#   ANDROID_KEYSTORE_PASSWORD  the keystore password
+#   ANDROID_KEY_ALIAS          artemis
+#   ANDROID_KEY_PASSWORD       the key password
+#
+# Keep release.jks safe: you need the same key to install updates over a
+# previously installed build.
