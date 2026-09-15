@@ -14,14 +14,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    env:
-      # Optional. Set these repository secrets to get a signed release APK.
-      # See the note at the bottom of this file.
-      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -43,67 +35,56 @@ jobs:
         run: |
           NDK_VERSION=$(grep -oP 'ndkVersion\s+"\K[^"]+' app/build.gradle)
           echo "Installing NDK $NDK_VERSION"
-          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
+          SDKMANAGER="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;$NDK_VERSION"
 
-      - name: Build debug and release APKs
-        run: ./gradlew --no-daemon assembleDebug assembleRelease
-
-      - name: Sign release APKs
-        if: env.KEYSTORE_B64 != ''
+      - name: Decode signing keystore
+        id: keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.TWILIGHT_KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
-          APKSIGNER=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/apksigner | sort -V | tail -1)
-          echo "Using $APKSIGNER"
-          find app/build/outputs/apk -name '*-release-unsigned.apk' -print0 |
-            while IFS= read -r -d '' apk; do
-              signed="${apk%-unsigned.apk}.apk"
-              "$APKSIGNER" sign \
-                --ks "$RUNNER_TEMP/release.jks" \
-                --ks-pass env:KEYSTORE_PASSWORD \
-                --ks-key-alias "$KEY_ALIAS" \
-                --key-pass env:KEY_PASSWORD \
-                --out "$signed" "$apk"
-              echo "Signed $signed"
-            done
-          rm -f "$RUNNER_TEMP/release.jks"
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::TWILIGHT_KEYSTORE_BASE64 is not set - release APKs will be UNSIGNED and cannot be installed."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/twilight.p12"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: List built APKs
-        run: find app/build/outputs/apk -name '*.apk' -printf '%p  (%s bytes)\n' | sort
+      - name: Build release APKs
+        env:
+          TWILIGHT_KEYSTORE: ${{ steps.keystore.outputs.ready == 'true' && format('{0}/twilight.p12', runner.temp) || '' }}
+          TWILIGHT_KEYSTORE_PASSWORD: ${{ secrets.TWILIGHT_KEYSTORE_PASSWORD }}
+          TWILIGHT_KEY_ALIAS: twilight
+        run: ./gradlew --no-daemon assembleRelease
 
-      - name: Upload debug APKs
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-debug-${{ github.sha }}
-          path: app/build/outputs/apk/**/debug/*.apk
-          if-no-files-found: error
-          retention-days: 30
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/twilight.p12"
+
+      - name: Summarise build
+        run: |
+          {
+            echo "### APKs"
+            echo
+            if [ "${{ steps.keystore.outputs.ready }}" = "true" ]; then
+              echo "Signed with the persistent Twilight key - installs as an update over the previous build."
+            else
+              echo "**UNSIGNED** - set the \`TWILIGHT_KEYSTORE_BASE64\` and \`TWILIGHT_KEYSTORE_PASSWORD\` secrets."
+            fi
+            echo
+            echo '| APK | Size |'
+            echo '| --- | ---- |'
+            find app/build/outputs/apk -name '*.apk' -printf '| `%f` | %sk |\n' | sed 's/\([0-9]*\)k |/\1 bytes |/' | sort
+            echo
+            echo "Most phones need the **nonRoot_game / arm64-v8a** APK."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release APKs
         uses: actions/upload-artifact@v4
         with:
-          name: apk-release-${{ github.sha }}
+          name: twilight-release-${{ github.sha }}
           path: app/build/outputs/apk/**/release/*.apk
           if-no-files-found: error
-          retention-days: 30
-
-# Signing the release build (optional)
-# -----------------------------------
-# Without secrets, the release APKs are uploaded unsigned and Android will
-# refuse to install them. The debug APKs are always signed with Gradle's
-# throwaway debug key and install as-is.
-#
-# To get a signed release APK, create a keystore once:
-#
-#   keytool -genkey -v -keystore release.jks -alias artemis \
-#           -keyalg RSA -keysize 4096 -validity 10000
-#
-# then add these repository secrets (Settings -> Secrets and variables -> Actions):
-#
-#   ANDROID_KEYSTORE_BASE64    base64 -w0 release.jks
-#   ANDROID_KEYSTORE_PASSWORD  the keystore password
-#   ANDROID_KEY_ALIAS          artemis
-#   ANDROID_KEY_PASSWORD       the key password
-#
-# Keep release.jks safe: you need the same key to install updates over a
-# previously installed build.
+          retention-days: 90

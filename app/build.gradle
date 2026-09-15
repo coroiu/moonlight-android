@@ -1,5 +1,42 @@
 apply plugin: 'com.android.application'
 
+// --- Twilight build identity -------------------------------------------
+// This fork ships under its own application ID and name so it installs
+// alongside upstream Artemis rather than colliding with it.
+def twilightAppName = project.findProperty('twilightAppName') ?: 'Twilight'
+def twilightRepo = project.findProperty('twilightRepo') ?: 'OWNER/REPO'
+
+// Builds the Obtainium "add app" link used by the in-app update entry.
+// Mirrors the encoding upstream uses: literal scheme, percent-encoded JSON.
+def obtainiumUrl = { appId, appName, repo ->
+    def settings = groovy.json.JsonOutput.toJson([
+            apkFilterRegEx        : 'nonRoot',
+            matchGroutToUse       : '$1',
+            versionExtractionRegEx: 'v(.+)'
+    ])
+    def cfg = groovy.json.JsonOutput.toJson([
+            id                : appId,
+            url               : "https://github.com/${repo}".toString(),
+            author            : repo.tokenize('/')[0],
+            name              : appName,
+            additionalSettings: settings
+    ])
+    return "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/" +
+            java.net.URLEncoder.encode(cfg, 'UTF-8').replace('+', '%20')
+}
+
+// --- Twilight release signing ------------------------------------------
+// Keystore comes from env vars (CI) or gradle properties (local, e.g. in
+// ~/.gradle/gradle.properties). Using one persistent key means every build
+// installs as an update over the last one instead of forcing a reinstall.
+// When no keystore is configured, release builds are left unsigned rather
+// than failing the build.
+def twilightKeystorePath = System.getenv('TWILIGHT_KEYSTORE') ?: project.findProperty('twilightKeystore')
+def twilightKeystorePassword = System.getenv('TWILIGHT_KEYSTORE_PASSWORD') ?: project.findProperty('twilightKeystorePassword')
+def twilightKeyAlias = System.getenv('TWILIGHT_KEY_ALIAS') ?: project.findProperty('twilightKeyAlias') ?: 'twilight'
+def twilightKeyPassword = System.getenv('TWILIGHT_KEY_PASSWORD') ?: project.findProperty('twilightKeyPassword') ?: twilightKeystorePassword
+def twilightSigningReady = twilightKeystorePath != null && file(twilightKeystorePath).exists()
+
 android {
     ndkVersion "27.0.12077973"
 
@@ -54,7 +91,7 @@ android {
 
             resValue "string",
                     "obtainium_app_url",
-                    "https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22com.limelight.noir%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FClassicOldSong%2Fmoonlight-android%22%2C%22author%22%3A%22ClassicOldSong%22%2C%22name%22%3A%22Artemis%22%2C%22additionalSettings%22%3A%22%7B%5C%22apkFilterRegEx%5C%22%3A%5C%22nonRoot%5C%22%2C%5C%22matchGroutToUse%5C%22%3A%5C%22%241%5C%22%2C%5C%22versionExtractionRegEx%5C%22%3A%5C%22v(.%2B)%5C%22%7D%22%7D"
+                    obtainiumUrl("com.limelight.twilight", twilightAppName, twilightRepo)
 
             applicationId "com.limelight"
             dimension "root"
@@ -93,12 +130,24 @@ android {
         }
     }
 
+    signingConfigs {
+        release {
+            if (twilightSigningReady) {
+                storeFile file(twilightKeystorePath)
+                storePassword twilightKeystorePassword
+                keyAlias twilightKeyAlias
+                keyPassword twilightKeyPassword
+                storeType 'PKCS12'
+            }
+        }
+    }
+
     buildTypes {
         debug {
-            applicationIdSuffix ".noirdebug"
-            resValue "string", "app_label", "Diana"
-            resValue "string", "app_label_root", "Diana (Root)"
-            resValue "string", "app_label_game", "Diana (Game)"
+            applicationIdSuffix ".twilightdebug"
+            resValue "string", "app_label", "${twilightAppName} Dev"
+            resValue "string", "app_label_root", "${twilightAppName} Dev (Root)"
+            resValue "string", "app_label_game", "${twilightAppName} Dev (Game)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -134,10 +183,14 @@ android {
             // is to please change the applicationId before you publish.
             //
             // TL;DR: Leave the following line alone!
-            applicationIdSuffix ".noir"
-            resValue "string", "app_label", "Artemis"
-            resValue "string", "app_label_root", "Artemis (Root)"
-            resValue "string", "app_label_game", "Artemis (Game)"
+            applicationIdSuffix ".twilight"
+            resValue "string", "app_label", twilightAppName
+            resValue "string", "app_label_root", "${twilightAppName} (Root)"
+            resValue "string", "app_label_game", "${twilightAppName} (Game)"
+
+            if (twilightSigningReady) {
+                signingConfig signingConfigs.release
+            }
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

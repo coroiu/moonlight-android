@@ -47,3 +47,8 @@ app/.externalNativeBuild/
 
 # agent files
 AGENTS.md
+# Signing keystores -- never commit these
+*.p12
+*.jks
+*.keystore
+keystore.properties
