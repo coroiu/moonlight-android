@@ -31,10 +31,17 @@ def obtainiumUrl = { appId, appName, repo ->
 // installs as an update over the last one instead of forcing a reinstall.
 // When no keystore is configured, release builds are left unsigned rather
 // than failing the build.
-def twilightKeystorePath = System.getenv('TWILIGHT_KEYSTORE') ?: project.findProperty('twilightKeystore')
-def twilightKeystorePassword = System.getenv('TWILIGHT_KEYSTORE_PASSWORD') ?: project.findProperty('twilightKeystorePassword')
-def twilightKeyAlias = System.getenv('TWILIGHT_KEY_ALIAS') ?: project.findProperty('twilightKeyAlias') ?: 'twilight'
-def twilightKeyPassword = System.getenv('TWILIGHT_KEY_PASSWORD') ?: project.findProperty('twilightKeyPassword') ?: twilightKeystorePassword
+// trim(): secrets delivered through CI often pick up a stray trailing
+// newline, which would otherwise surface as an opaque "keystore password
+// was incorrect" failure.
+def twilightSetting = { envName, propName ->
+    def v = System.getenv(envName) ?: project.findProperty(propName)
+    return v?.toString()?.trim() ?: null
+}
+def twilightKeystorePath = twilightSetting('TWILIGHT_KEYSTORE', 'twilightKeystore')
+def twilightKeystorePassword = twilightSetting('TWILIGHT_KEYSTORE_PASSWORD', 'twilightKeystorePassword')
+def twilightKeyAlias = twilightSetting('TWILIGHT_KEY_ALIAS', 'twilightKeyAlias') ?: 'twilight'
+def twilightKeyPassword = twilightSetting('TWILIGHT_KEY_PASSWORD', 'twilightKeyPassword') ?: twilightKeystorePassword
 def twilightSigningReady = twilightKeystorePath != null && file(twilightKeystorePath).exists()
 
 android {
