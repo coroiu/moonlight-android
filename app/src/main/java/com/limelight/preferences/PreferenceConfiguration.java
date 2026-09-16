@@ -238,7 +238,6 @@ public class PreferenceConfiguration {
     public String customRefreshRate;
     public int meteredBitrate;
     public FormatOption videoFormat;
-    public int framePacingWarpFactor = 0;
     public int deadzonePercentage;
     public int oscOpacity;
     public int oscKeyboardOpacity;
@@ -649,6 +648,16 @@ private static int getFramePacingValue(Context context) {
                     .apply();
         }
 
+        // Migrate the removed "Warp Drive" options. They multiplied the frame rate
+        // requested from the host and left the decoder configured for a rate that was
+        // never sent, and getFramePacingValue() had no branch for them either.
+        if (prefs.contains(FRAME_PACING_PREF_STRING)) {
+            String stored = prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
+            if (stored.equals("warp") || stored.equals("warp2")) {
+                prefs.edit().putString(FRAME_PACING_PREF_STRING, "balanced").apply();
+            }
+        }
+
         String str = prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
         if (str.equals("latency")) {
             return FRAME_PACING_MIN_LATENCY;
@@ -862,13 +871,6 @@ private static int getFramePacingValue(Context context) {
         config.framePacing = getFramePacingValue(context);
         config.preferLowerDelays = getPreferLowerDelays(context);
 
-
-        String warpFactorStr = prefs.getString(FRAME_PACING_PREF_STRING, "");
-        if (warpFactorStr.equals("warp")) {
-            config.framePacingWarpFactor = 2;
-        } else if (warpFactorStr.equals("warp2")) {
-            config.framePacingWarpFactor = 4;
-        }
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
 

@@ -1213,42 +1213,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 BufferInfo info = new BufferInfo();
                 long lastOutputNs = System.nanoTime();
                 while (!stopping) {
-                    /* LATEST_ONLY_LOW_LATENCY */
-                    if (!preferLowerDelays) {
-                        try {
-                            android.media.MediaCodec.BufferInfo __tmpInfo = new android.media.MediaCodec.BufferInfo();
-                            int __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            int __last = -1;
-                            long __lastPtsUs = -1L;
-
-                            // Drain non-blocking; keep only the newest buffer
-                            while (__idx >= 0) {
-                                if (__last >= 0) {
-                                    try { videoDecoder.releaseOutputBuffer(__last, false); } catch (Throwable ignored) {}
-                                }
-                                __last = __idx;
-                                __lastPtsUs = __tmpInfo.presentationTimeUs;
-                                __idx = videoDecoder.dequeueOutputBuffer(__tmpInfo, 0);
-                            }
-
-                            if (__last >= 0) {
-                                long __nowNs = System.nanoTime();
-                                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                                    releaseWithPolicy(__last, System.nanoTime());} else {
-                                    releaseWithPolicy(__last, System.nanoTime());}
-
-                                // Update decode->present EWMA and decode stats if we have a valid PTS
-                                if (__lastPtsUs >= 0) {
-                                    long __d2pNs = __nowNs - (__lastPtsUs * 1000L);
-                                    ewmaDecodeToPresentNs += EWMA_ALPHA * (__d2pNs - ewmaDecodeToPresentNs);
-                                    try { updateDecodeLatencyStats(__lastPtsUs); } catch (Throwable ignored) {}
-                                }
-
-                                continue; // handled this iteration
-                            }
-                        } catch (Throwable ignored) {}
-                    }
-                    /* /LATEST_ONLY_LOW_LATENCY */
+                    // NB: no "latest-only" drain here. Draining every ready output
+                    // buffer and discarding all but the newest turned any momentary
+                    // hiccup into a self-sustaining ~50% frame loss: once two buffers
+                    // were ready per pass it binned one every pass and never recovered.
+                    // Frames are queued below and paced by the Choreographer, as in
+                    // v20.2.6.
 
 
                     try {

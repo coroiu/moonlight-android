@@ -772,10 +772,6 @@ public class Game extends AppCompatActivity implements SurfaceHolder.Callback,
             }
         }
 
-        if (prefConfig.framePacingWarpFactor > 0) {
-            chosenFrameRate *= prefConfig.framePacingWarpFactor;
-        }
-
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(
                         displayWidth,
