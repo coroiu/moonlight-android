@@ -1,6 +1,6 @@
-# Artemis Android
+# Twilight Android
 
-Previously named Moonlight Noir
+Forked version of Artemis, previously named Moonlight Noir. Allows me to build versions of Artemis with AI-written bug-fixes and features.
 
 An open source client for [Apollo](https://github.com/ClassicOldSong/Apollo)/[Sunshine](https://github.com/LizardByte/Sunshine).
 
